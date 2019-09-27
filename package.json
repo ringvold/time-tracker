@@ -1,4 +1,7 @@
 {
+  "scripts": {
+    "start": "elm-app start"
+  },
   "devDependencies": {
     "elm-format": "^0.8.1"
   }

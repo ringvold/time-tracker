@@ -4,5 +4,9 @@
   },
   "devDependencies": {
     "elm-format": "^0.8.1"
-  }
+  },
+  "dependencies": {
+    "firebase": "^7.1.0"
+  },
+  "version": "0.0.0"
 }

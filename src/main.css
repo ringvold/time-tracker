@@ -16,26 +16,3 @@ body {
   color: #293c4b;
 }
 
-h1 {
-  font-size: 30px;
-}
-
-img {
-  margin: 20px 0;
-  max-width: 200px;
-}
-
-
-.button {
-  cursor: pointer;
-  padding: 1em;
-  border: 1px solid #eee;
-  font-weight: bold;
-  font-size: 14px;
-  background-color: green;
-  color: #fff;
-}
-
-.button.stop-time {
-  background-color: red;
-}

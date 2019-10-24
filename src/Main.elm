@@ -1,12 +1,20 @@
-module Main exposing (Model, Msg(..), init, main, update, view)
+port module Main exposing (Model, Msg(..), init, main, update, view)
 
 import Browser
 import DateFormat
 import Dict exposing (Dict)
 import Duration exposing (Duration)
-import Html exposing (..)
-import Html.Attributes exposing (..)
-import Html.Events exposing (onClick)
+import Element exposing (..)
+import Element.Background exposing (color)
+import Element.Border as Border
+import Element.Events exposing (onClick)
+import Element.Font as Font
+import Element.Input as Input
+import Element.Region exposing (..)
+import Html exposing (Html)
+import Json.Decode as D exposing (Decoder)
+import Json.Decode.Pipeline as JDP
+import Json.Encode as E
 import Quantity
 import Task
 import Time exposing (Posix, Zone)
@@ -21,7 +29,15 @@ type alias Model =
     , timeZone : Zone
     , currentTime : Maybe Posix
     , dates : Dates
+    , session : Session
+    , username : String
+    , password : String
     }
+
+
+type Session
+    = LoggedIn User
+    | Guest
 
 
 type alias Dates =
@@ -29,7 +45,8 @@ type alias Dates =
 
 
 type alias Day =
-    { date : Posix
+    { date : String
+    , posix : Posix
     , duration : Duration
     }
 
@@ -54,6 +71,9 @@ init =
       , timeZone = Time.utc
       , currentTime = Nothing
       , dates = Dict.empty
+      , session = Guest
+      , username = ""
+      , password = ""
       }
     , Cmd.batch [ Task.perform TimeZoneReceived Time.here, Task.perform CurrentTimeReceived Time.now ]
     )
@@ -70,6 +90,11 @@ type Msg
     | UpdatedTrackingReceived Tracking
     | CurrentTimeReceived Posix
     | TimeZoneReceived Zone
+    | UserReceived (Result D.Error User)
+    | PortErrorReceived
+    | UsernameUpdated String
+    | PasswordUpdated String
+    | LoginClicked
 
 
 update : Msg -> Model -> ( Model, Cmd Msg )
@@ -111,6 +136,24 @@ update msg model =
         TimeZoneReceived zone ->
             ( { model | timeZone = zone }, Cmd.none )
 
+        UserReceived (Ok user) ->
+            ( { model | session = LoggedIn user }, Cmd.none )
+
+        UserReceived (Err error) ->
+            ( model, Cmd.none )
+
+        PortErrorReceived ->
+            ( model, Cmd.none )
+
+        UsernameUpdated username ->
+            ( { model | username = username }, Cmd.none )
+
+        PasswordUpdated password ->
+            ( { model | password = password }, Cmd.none )
+
+        LoginClicked ->
+            ( model, sendToJS <| LoginUser model.username model.password )
+
 
 updateTrackings : String -> Posix -> Dates -> Duration -> Dates
 updateTrackings key today dates newDuration =
@@ -124,7 +167,7 @@ updateTrackings key today dates newDuration =
                         }
 
                 Nothing ->
-                    Just { date = today, duration = newDuration }
+                    Just { date = key, posix = today, duration = newDuration }
         )
         dates
 
@@ -132,9 +175,9 @@ updateTrackings key today dates newDuration =
 dateString : Zone -> Posix -> String
 dateString =
     DateFormat.format
-        [ DateFormat.dayOfMonthFixed
+        [ DateFormat.yearNumber
         , DateFormat.monthFixed
-        , DateFormat.yearNumber
+        , DateFormat.dayOfMonthFixed
         ]
 
 
@@ -144,43 +187,116 @@ dateString =
 
 view : Model -> Html Msg
 view model =
-    div []
-        [ h1 [] [ text "Time tracking" ]
-        , viewTracking model
-        , viewDates model
-        ]
+    case model.session of
+        Guest ->
+            Element.layout [ spacing 10 ] <|
+                column headingStyle
+                    [ text "Login required"
+                    , Input.email []
+                        { onChange = UsernameUpdated
+                        , text = model.username
+                        , placeholder = Nothing
+                        , label = Input.labelAbove [] (text "Email")
+                        }
+                    , Input.currentPassword []
+                        { onChange = PasswordUpdated
+                        , text = model.password
+                        , placeholder = Nothing
+                        , label = Input.labelAbove [] (text "Password")
+                        , show = False
+                        }
+                    , Input.button []
+                        { onPress = Just LoginClicked
+                        , label = text "Login"
+                        }
+                    ]
+
+        LoggedIn user ->
+            Element.layout [ spacing 0 ] <|
+                column [ centerX, spacing 30 ]
+                    [ el headingStyle (text "Time tracking")
+                    , viewTracking model
+                    , viewDays model
+                    ]
 
 
-viewTracking : Model -> Html Msg
+edges =
+    { top = 0
+    , right = 0
+    , bottom = 0
+    , left = 0
+    }
+
+
+headingStyle =
+    [ heading 1
+    , Font.size 40
+    , centerX
+    , paddingEach { edges | top = 30 }
+    , Font.center
+    ]
+
+
+green =
+    rgb 220 20 60
+
+
+viewTracking : Model -> Element Msg
 viewTracking model =
     case model.tracking of
         NotStarted ->
-            button [ class "button start-time", onClick StartTimeClicked ] [ text "Start" ]
+            Input.button buttonStyle
+                { onPress = Just StartTimeClicked
+                , label = text "Start"
+                }
 
         Started startTime ->
-            div []
-                [ button [ class "button stop-time", onClick <| StopTimeClicked startTime ] [ text "Stop" ]
-                , div [] [ h3 [] [ text <| "Started: " ++ hourAndMinute model.timeZone startTime ] ]
+            column [ spacing 20, centerX ]
+                [ Input.button buttonStyle
+                    { onPress = Just <| StopTimeClicked startTime
+                    , label = text "Stop"
+                    }
+                , el [ heading 3, centerX ] <| text <| "Started " ++ hourAndMinute model.timeZone startTime
                 ]
 
         Ended startTime endTime ->
-            div []
-                [ button [ class "button", onClick <| ContinueTimeClicked startTime ] [ text "Continue" ]
-                , div [] [ h3 [] [ text <| "Started: " ++ hourAndMinute model.timeZone startTime ] ]
-                , div [] [ h3 [] [ text <| "Ended: " ++ hourAndMinute model.timeZone endTime ] ]
-                ]
+            Input.button buttonStyle
+                { onPress = Just StartTimeClicked
+                , label = text "Start"
+                }
 
 
-viewDates : Model -> Html msg
-viewDates model =
-    Dict.toList model.dates
-        |> List.map (viewDate model.timeZone)
-        |> div []
+buttonStyle =
+    [ color (rgb255 0 128 0)
+    , paddingXY 25 20
+    , Font.size 20
+    , Font.semiBold
+    , Font.color (rgb255 255 255 255)
+    , centerX
+    , Border.rounded 5
+    , Font.center
+    ]
 
 
-viewDate : Zone -> ( String, Day ) -> Html msg
-viewDate zone ( key, day ) =
-    div [] [ h2 [] [ text <| displayDate zone day.date ++ " : " ++ showDuration day.duration ] ]
+viewDays : Model -> Element Msg
+viewDays model =
+    table []
+        { data = Dict.values model.dates
+        , columns =
+            [ { header = Element.text "Date"
+              , width = fill
+              , view =
+                    \day ->
+                        Element.text <| displayDate model.timeZone day.posix
+              }
+            , { header = Element.text "Duration"
+              , width = fill
+              , view =
+                    \day ->
+                        Element.text <| showDuration day.duration
+              }
+            ]
+        }
 
 
 displayDate : Zone -> Posix -> String
@@ -211,6 +327,87 @@ hourAndMinute =
 
 
 
+-- PORTS --
+
+
+port toJS : GenericPortData -> Cmd msg
+
+
+port fromJS : (GenericPortData -> msg) -> Sub msg
+
+
+type alias GenericPortData =
+    { tag : String, data : E.Value }
+
+
+sendToJS : ToJS -> Cmd msg
+sendToJS toSend =
+    case toSend of
+        LoginUser username password ->
+            toJS { tag = "LoginUser", data = E.object [ ( "email", E.string username ), ( "password", E.string password ) ] }
+
+
+encodeDates : Dates -> E.Value
+encodeDates dates =
+    E.list encodeDay (Dict.values dates)
+
+
+encodeDay : Day -> E.Value
+encodeDay day =
+    E.object
+        [ ( "date", E.string day.date )
+        , ( "posix", E.string (String.fromInt <| Time.posixToMillis day.posix) )
+        , ( "duration", E.string (String.fromFloat <| Duration.inMilliseconds day.duration) )
+        ]
+
+
+type alias User =
+    { displayName : String
+    , email : String
+    , uid : String
+    }
+
+
+userDecoder : Decoder User
+userDecoder =
+    D.succeed User
+        |> JDP.required "displayName" D.string
+        |> JDP.required "email" D.string
+        |> JDP.required "uid" D.string
+
+
+subscriptions : Model -> Sub Msg
+subscriptions model =
+    fromJS
+        (\portData ->
+            case toElmTagFromString portData.tag of
+                AuthStateChanged ->
+                    UserReceived <| D.decodeValue userDecoder portData.data
+
+                Unknown ->
+                    PortErrorReceived
+        )
+
+
+type FromJS
+    = AuthStateChanged
+    | Unknown
+
+
+type ToJS
+    = LoginUser String String
+
+
+toElmTagFromString string =
+    case string of
+        "AuthStateChanged" ->
+            AuthStateChanged
+
+        _ ->
+            Unknown
+
+
+
 ---- PROGRAM ----
 
 
@@ -220,5 +417,5 @@ main =
         { view = view
         , init = always init
         , update = update
-        , subscriptions = always Sub.none
+        , subscriptions = subscriptions
         }

@@ -1,9 +1,13 @@
 {
   "scripts": {
-    "start": "elm-app start"
+    "start": "elm-app start",
+    "build": "elm-app build",
+    "deploy": "firebase deploy"
   },
   "devDependencies": {
-    "elm-format": "^0.8.1"
+    "elm-format": "^0.8.1",
+    "firebase-tools": "^7.4.0",
+    "prettier": "^1.18.2"
   },
   "dependencies": {
     "firebase": "^7.1.0"

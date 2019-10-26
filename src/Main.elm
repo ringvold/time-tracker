@@ -70,6 +70,7 @@ type alias EndTime =
 type alias Form =
     { email : String
     , password : String
+    , confirmPassword : String
     }
 
 
@@ -80,7 +81,7 @@ init =
       , currentTime = Nothing
       , dates = Dict.empty
       , session = Guest
-      , form = Form "" ""
+      , form = Form "" "" ""
       , signup = False
       , error = Nothing
       }
@@ -106,6 +107,7 @@ type Msg
     | UnknownTagReceivedFromJS String
     | EmailUpdated String
     | PasswordUpdated String
+    | ConfirmPasswordUpdated String
     | LoginTriggered
     | ErrorReceived (Result D.Error Error)
     | InitSignupTriggered
@@ -156,7 +158,7 @@ update msg model =
         UserReceived (Ok (Just user)) ->
             ( { model
                 | session = LoggedIn user
-                , form = setEmail "" <| setPassword "" model.form
+                , form = resetForm model.form
                 , error = Nothing
               }
             , Cmd.none
@@ -166,7 +168,7 @@ update msg model =
             -- Got null from authChanged
             -- Happens at logout. Not an error per se.
             ( { model
-                | form = setEmail "" <| setPassword "" model.form
+                | form = resetForm model.form
                 , error = Nothing
               }
             , Cmd.none
@@ -184,6 +186,9 @@ update msg model =
         PasswordUpdated password ->
             ( { model | form = setPassword password model.form }, Cmd.none )
 
+        ConfirmPasswordUpdated password ->
+            ( { model | form = setConfirmPassword password model.form }, Cmd.none )
+
         LoginTriggered ->
             ( { model | error = Nothing }, sendToJS <| LoginUser model.form )
 
@@ -191,7 +196,15 @@ update msg model =
             ( { model | signup = True }, Cmd.none )
 
         SignupTriggered ->
-            ( model, sendToJS <| CreateUser model.form )
+            if model.form.password == model.form.confirmPassword then
+                ( model, sendToJS <| CreateUser model.form )
+
+            else
+                ( { model
+                    | error = Just "The password fields are not matching"
+                  }
+                , Cmd.none
+                )
 
         UserSignedOutReceived ->
             ( { model | signup = False, session = Guest }, Cmd.none )
@@ -214,6 +227,18 @@ setEmail email form =
 setPassword : String -> Form -> Form
 setPassword password form =
     { form | password = password }
+
+
+setConfirmPassword : String -> Form -> Form
+setConfirmPassword password form =
+    { form | confirmPassword = password }
+
+
+resetForm : Form -> Form
+resetForm form =
+    setEmail "" form
+        |> setPassword ""
+        |> setConfirmPassword ""
 
 
 updateTrackings : String -> Posix -> Dates -> Duration -> Dates
@@ -400,7 +425,7 @@ signupView model =
                 ]
                 (text "Email")
         }
-    , Input.currentPassword [ onEnter SignupTriggered ]
+    , Input.newPassword [ onEnter SignupTriggered ]
         { onChange = PasswordUpdated
         , text = model.form.password
         , placeholder = Nothing
@@ -412,9 +437,21 @@ signupView model =
                 (text "Password")
         , show = False
         }
+    , Input.newPassword [ onEnter SignupTriggered ]
+        { onChange = ConfirmPasswordUpdated
+        , text = model.form.confirmPassword
+        , placeholder = Nothing
+        , label =
+            Input.labelAbove
+                [ Font.alignLeft
+                , Font.size 30
+                ]
+                (text "Password")
+        , show = False
+        }
     , Input.button []
         { onPress = Just SignupTriggered
-        , label = text "Sign Up"
+        , label = text "Create account"
         }
     ]
 

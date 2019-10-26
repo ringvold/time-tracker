@@ -31,52 +31,70 @@ const app = Elm.Main.init({
     node: document.getElementById('root'),
 })
 
-app.ports.toJS.subscribe(data => {
-    switch (data.tag) {
+firebase.auth().onAuthStateChanged(function(user) {
+    app.ports.fromJS.send({ tag: 'AuthStateChanged', data: user })
+})
+
+app.ports.toJS.subscribe(portData => {
+    switch (portData.tag) {
         case 'LoginUser':
-            debugger
             firebase
                 .auth()
-                .signInWithEmailAndPassword(data.data.email, data.data.password)
+                .signInWithEmailAndPassword(
+                    portData.data.email,
+                    portData.data.password
+                )
                 .catch(function(error) {
-                    // TODO: Send info back to Elm
+                    console.log(error)
                     var errorCode = error.code
                     var errorMessage = error.message
                     console.log(errorCode, errorMessage)
+                    app.ports.fromJS.send({
+                        tag: 'LoginError',
+                        data: error,
+                    })
                 })
             break
-        case 'createUser':
+        case 'CreateUser':
             firebase
                 .auth()
-                .createUserWithEmailAndPassword(email, password)
+                .createUserWithEmailAndPassword(
+                    portData.data.email,
+                    portData.data.password
+                )
                 .catch(function(error) {
                     // TODO: Send info back to Elm
                     var errorCode = error.code
                     var errorMessage = error.message
                     console.log(errorCode, errorMessage)
+                    app.ports.fromJS.send({
+                        tag: 'SignupError',
+                        data: error,
+                    })
                 })
-        case 'logout':
-            app.ports.logout.subscribe(data => {
-                firebase
-                    .auth()
-                    .signOut()
-                    .then(function() {
-                        // Sign-out successful.
-                        // TODO: Send info back to Elm
+            break
+        case 'SaveData':
+            break
+        case 'SignOut':
+            firebase
+                .auth()
+                .signOut()
+                .then(function() {
+                    app.ports.fromJS.send({
+                        tag: 'UserSignedOut',
+                        data: null,
                     })
-                    .catch(function(error) {
-                        // An error happened.
-                        // TODO: Send info back to Elm
+                })
+                .catch(function(error) {
+                    app.ports.fromJS.send({
+                        tag: 'SignOutError',
+                        data: error,
                     })
-            })
+                })
             break
         default:
             console.warn('Got an unknown tag')
     }
-})
-
-firebase.auth().onAuthStateChanged(function(user) {
-    app.ports.fromJS.send({ tag: 'aZuthStateChanged', data: user })
 })
 
 // app.ports.saveData.subscribe((data) => {

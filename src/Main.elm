@@ -12,6 +12,7 @@ import Element.Font as Font
 import Element.Input as Input
 import Element.Region exposing (..)
 import Html exposing (Html)
+import Html.Events
 import Json.Decode as D exposing (Decoder)
 import Json.Decode.Pipeline as JDP
 import Json.Encode as E
@@ -30,8 +31,9 @@ type alias Model =
     , currentTime : Maybe Posix
     , dates : Dates
     , session : Session
-    , username : String
-    , password : String
+    , form : Form
+    , signup : Bool
+    , error : Maybe String
     }
 
 
@@ -65,6 +67,12 @@ type alias EndTime =
     Posix
 
 
+type alias Form =
+    { email : String
+    , password : String
+    }
+
+
 init : ( Model, Cmd Msg )
 init =
     ( { tracking = NotStarted
@@ -72,10 +80,14 @@ init =
       , currentTime = Nothing
       , dates = Dict.empty
       , session = Guest
-      , username = ""
-      , password = ""
+      , form = Form "" ""
+      , signup = False
+      , error = Nothing
       }
-    , Cmd.batch [ Task.perform TimeZoneReceived Time.here, Task.perform CurrentTimeReceived Time.now ]
+    , Cmd.batch
+        [ Task.perform TimeZoneReceived Time.here
+        , Task.perform CurrentTimeReceived Time.now
+        ]
     )
 
 
@@ -90,11 +102,16 @@ type Msg
     | UpdatedTrackingReceived Tracking
     | CurrentTimeReceived Posix
     | TimeZoneReceived Zone
-    | UserReceived (Result D.Error User)
-    | PortErrorReceived
-    | UsernameUpdated String
+    | UserReceived (Result D.Error (Maybe User))
+    | UnknownTagReceivedFromJS String
+    | EmailUpdated String
     | PasswordUpdated String
-    | LoginClicked
+    | LoginTriggered
+    | ErrorReceived (Result D.Error Error)
+    | InitSignupTriggered
+    | SignupTriggered
+    | UserSignedOutReceived
+    | LogoutTriggered
 
 
 update : Msg -> Model -> ( Model, Cmd Msg )
@@ -136,23 +153,67 @@ update msg model =
         TimeZoneReceived zone ->
             ( { model | timeZone = zone }, Cmd.none )
 
-        UserReceived (Ok user) ->
-            ( { model | session = LoggedIn user }, Cmd.none )
+        UserReceived (Ok (Just user)) ->
+            ( { model
+                | session = LoggedIn user
+                , form = setEmail "" <| setPassword "" model.form
+                , error = Nothing
+              }
+            , Cmd.none
+            )
+
+        UserReceived (Ok Nothing) ->
+            -- Got null from authChanged
+            -- Happens at logout. Not an error per se.
+            ( { model
+                | form = setEmail "" <| setPassword "" model.form
+                , error = Nothing
+              }
+            , Cmd.none
+            )
 
         UserReceived (Err error) ->
+            ( { model | error = Just (D.errorToString error) }, Cmd.none )
+
+        UnknownTagReceivedFromJS unkownTag ->
             ( model, Cmd.none )
 
-        PortErrorReceived ->
-            ( model, Cmd.none )
-
-        UsernameUpdated username ->
-            ( { model | username = username }, Cmd.none )
+        EmailUpdated email ->
+            ( { model | form = setEmail email model.form }, Cmd.none )
 
         PasswordUpdated password ->
-            ( { model | password = password }, Cmd.none )
+            ( { model | form = setPassword password model.form }, Cmd.none )
 
-        LoginClicked ->
-            ( model, sendToJS <| LoginUser model.username model.password )
+        LoginTriggered ->
+            ( { model | error = Nothing }, sendToJS <| LoginUser model.form )
+
+        InitSignupTriggered ->
+            ( { model | signup = True }, Cmd.none )
+
+        SignupTriggered ->
+            ( model, sendToJS <| CreateUser model.form )
+
+        UserSignedOutReceived ->
+            ( { model | signup = False, session = Guest }, Cmd.none )
+
+        LogoutTriggered ->
+            ( model, sendToJS SignOut )
+
+        ErrorReceived (Ok error) ->
+            ( { model | error = Just error.message }, Cmd.none )
+
+        ErrorReceived (Err error) ->
+            ( { model | error = Just "Error handling error -_-" }, Cmd.none )
+
+
+setEmail : String -> Form -> Form
+setEmail email form =
+    { form | email = email }
+
+
+setPassword : String -> Form -> Form
+setPassword password form =
+    { form | password = password }
 
 
 updateTrackings : String -> Posix -> Dates -> Duration -> Dates
@@ -182,42 +243,7 @@ dateString =
 
 
 
----- VIEW ----
-
-
-view : Model -> Html Msg
-view model =
-    case model.session of
-        Guest ->
-            Element.layout [ spacing 10 ] <|
-                column headingStyle
-                    [ text "Login required"
-                    , Input.email []
-                        { onChange = UsernameUpdated
-                        , text = model.username
-                        , placeholder = Nothing
-                        , label = Input.labelAbove [] (text "Email")
-                        }
-                    , Input.currentPassword []
-                        { onChange = PasswordUpdated
-                        , text = model.password
-                        , placeholder = Nothing
-                        , label = Input.labelAbove [] (text "Password")
-                        , show = False
-                        }
-                    , Input.button []
-                        { onPress = Just LoginClicked
-                        , label = text "Login"
-                        }
-                    ]
-
-        LoggedIn user ->
-            Element.layout [ spacing 0 ] <|
-                column [ centerX, spacing 30 ]
-                    [ el headingStyle (text "Time tracking")
-                    , viewTracking model
-                    , viewDays model
-                    ]
+-- STYLING
 
 
 edges =
@@ -228,17 +254,169 @@ edges =
     }
 
 
-headingStyle =
-    [ heading 1
-    , Font.size 40
+mainContentStyle =
+    [ Font.size 40
     , centerX
     , paddingEach { edges | top = 30 }
-    , Font.center
+    , width (fill |> maximum 400)
     ]
 
 
 green =
-    rgb 220 20 60
+    rgb255 220 20 60
+
+
+red =
+    rgb255 240 128 128
+
+
+buttonStyle =
+    [ color (rgb255 0 128 0)
+    , paddingXY 25 20
+    , Font.size 20
+    , Font.semiBold
+    , Font.color (rgb255 255 255 255)
+    , centerX
+    , Border.rounded 5
+    , Font.center
+    ]
+
+
+
+---- VIEW ----
+
+
+view : Model -> Html Msg
+view model =
+    Element.layout
+        [ spacing 10
+        ]
+    <|
+        column mainContentStyle <|
+            [ logoutButton model
+            , column
+                []
+                [ loginSignupView model
+                ]
+            ]
+
+
+logoutButton model =
+    case model.session of
+        Guest ->
+            text ""
+
+        LoggedIn user ->
+            el [ alignRight, Font.size 20, spacing 20 ] <|
+                Input.button []
+                    { onPress = Just LogoutTriggered
+                    , label = text "Logout"
+                    }
+
+
+errorView : Maybe String -> Element Msg
+errorView error =
+    el
+        [ spacing 10 ]
+    <|
+        case error of
+            Just err ->
+                el
+                    [ Font.size 20
+                    , padding 10
+                    , Border.dashed
+                    , Border.color green
+                    , Border.width 1
+                    , Font.color green
+                    ]
+                <|
+                    text err
+
+            Nothing ->
+                text ""
+
+
+loginSignupView : Model -> Element Msg
+loginSignupView model =
+    column [ spacing 20 ] <|
+        case model.session of
+            Guest ->
+                if model.signup then
+                    signupView model
+
+                else
+                    loginView model
+
+            LoggedIn user ->
+                [ column [ centerX, spacing 30 ]
+                    [ el [ spacing 20 ] (text "Time tracking")
+                    , errorView model.error
+                    , viewTracking model
+                    , viewDays model
+                    ]
+                ]
+
+
+loginView model =
+    [ text "Login required"
+    , errorView model.error
+    , Input.email [ onEnter LoginTriggered, Font.size 30 ]
+        { onChange = EmailUpdated
+        , text = model.form.email
+        , placeholder = Nothing
+        , label = Input.labelAbove [ alignLeft ] (text "Email")
+        }
+    , Input.currentPassword [ onEnter LoginTriggered, Font.size 30 ]
+        { onChange = PasswordUpdated
+        , text = model.form.password
+        , placeholder = Nothing
+        , label = Input.labelAbove [ alignLeft ] (text "Password")
+        , show = False
+        }
+    , row [ width fill ]
+        [ Input.button [ alignLeft ]
+            { onPress = Just LoginTriggered
+            , label = text "Login"
+            }
+        , Input.button [ alignRight ]
+            { onPress = Just InitSignupTriggered
+            , label = text "Sign up"
+            }
+        ]
+    ]
+
+
+signupView model =
+    [ text "Sign up"
+    , errorView model.error
+    , Input.email []
+        { onChange = EmailUpdated
+        , text = model.form.email
+        , placeholder = Nothing
+        , label =
+            Input.labelAbove
+                [ Font.alignLeft
+                , Font.size 30
+                ]
+                (text "Email")
+        }
+    , Input.currentPassword [ onEnter SignupTriggered ]
+        { onChange = PasswordUpdated
+        , text = model.form.password
+        , placeholder = Nothing
+        , label =
+            Input.labelAbove
+                [ Font.alignLeft
+                , Font.size 30
+                ]
+                (text "Password")
+        , show = False
+        }
+    , Input.button []
+        { onPress = Just SignupTriggered
+        , label = text "Sign Up"
+        }
+    ]
 
 
 viewTracking : Model -> Element Msg
@@ -256,7 +434,8 @@ viewTracking model =
                     { onPress = Just <| StopTimeClicked startTime
                     , label = text "Stop"
                     }
-                , el [ heading 3, centerX ] <| text <| "Started " ++ hourAndMinute model.timeZone startTime
+                , el [ heading 3, centerX ] <|
+                    text ("Started " ++ hourAndMinute model.timeZone startTime)
                 ]
 
         Ended startTime endTime ->
@@ -264,18 +443,6 @@ viewTracking model =
                 { onPress = Just StartTimeClicked
                 , label = text "Start"
                 }
-
-
-buttonStyle =
-    [ color (rgb255 0 128 0)
-    , paddingXY 25 20
-    , Font.size 20
-    , Font.semiBold
-    , Font.color (rgb255 255 255 255)
-    , centerX
-    , Border.rounded 5
-    , Font.center
-    ]
 
 
 viewDays : Model -> Element Msg
@@ -310,11 +477,21 @@ displayDate =
 
 
 showDuration duration =
+    let
+        toString =
+            round >> String.fromInt
+    in
     if duration |> Quantity.lessThan (Duration.minutes 60) then
-        String.concat [ String.fromInt <| round <| Duration.inMinutes duration, " minutes" ]
+        String.concat
+            [ Duration.inMinutes duration |> toString
+            , " minutes"
+            ]
 
     else
-        String.concat [ String.fromInt <| round <| Duration.inHours duration, " hours" ]
+        String.concat
+            [ Duration.inHours duration |> toString
+            , " hours"
+            ]
 
 
 hourAndMinute : Zone -> Posix -> String
@@ -324,6 +501,23 @@ hourAndMinute =
         , DateFormat.text ":"
         , DateFormat.minuteFixed
         ]
+
+
+onEnter : msg -> Element.Attribute msg
+onEnter msg =
+    Element.htmlAttribute
+        (Html.Events.on "keyup"
+            (D.field "key" D.string
+                |> D.andThen
+                    (\key ->
+                        if key == "Enter" then
+                            D.succeed msg
+
+                        else
+                            D.fail "Not the enter key"
+                    )
+            )
+        )
 
 
 
@@ -343,8 +537,32 @@ type alias GenericPortData =
 sendToJS : ToJS -> Cmd msg
 sendToJS toSend =
     case toSend of
-        LoginUser username password ->
-            toJS { tag = "LoginUser", data = E.object [ ( "email", E.string username ), ( "password", E.string password ) ] }
+        LoginUser form ->
+            toJS
+                { tag = "LoginUser"
+                , data = encodeEmailAndPassword form.email form.password
+                }
+
+        CreateUser form ->
+            toJS
+                { tag = "CreateUser"
+                , data =
+                    encodeEmailAndPassword form.email form.password
+                }
+
+        SignOut ->
+            toJS
+                { tag = "SignOut"
+                , data = E.null
+                }
+
+
+encodeEmailAndPassword : String -> String -> E.Value
+encodeEmailAndPassword email password =
+    E.object
+        [ ( "email", E.string email )
+        , ( "password", E.string password )
+        ]
 
 
 encodeDates : Dates -> E.Value
@@ -362,7 +580,7 @@ encodeDay day =
 
 
 type alias User =
-    { displayName : String
+    { displayName : Maybe String
     , email : String
     , uid : String
     }
@@ -371,40 +589,88 @@ type alias User =
 userDecoder : Decoder User
 userDecoder =
     D.succeed User
-        |> JDP.required "displayName" D.string
+        |> JDP.optional "displayName" (D.maybe D.string) Nothing
         |> JDP.required "email" D.string
         |> JDP.required "uid" D.string
+
+
+type alias Error =
+    { code : String, message : String }
+
+
+errorDecoder : Decoder Error
+errorDecoder =
+    D.succeed Error
+        |> JDP.required "code" D.string
+        |> JDP.required "message" D.string
 
 
 subscriptions : Model -> Sub Msg
 subscriptions model =
     fromJS
         (\portData ->
-            case toElmTagFromString portData.tag of
+            case fromJsTagFromString portData.tag of
                 AuthStateChanged ->
-                    UserReceived <| D.decodeValue userDecoder portData.data
+                    UserReceived <|
+                        D.decodeValue
+                            (D.oneOf
+                                [ D.null Nothing
+                                , D.map Just userDecoder
+                                ]
+                            )
+                            portData.data
 
-                Unknown ->
-                    PortErrorReceived
+                LoginError ->
+                    ErrorReceived <|
+                        D.decodeValue
+                            errorDecoder
+                            portData.data
+
+                SignupError ->
+                    ErrorReceived <|
+                        D.decodeValue
+                            errorDecoder
+                            portData.data
+
+                UserSignedOut ->
+                    UserSignedOutReceived
+
+                UnknownTag tag ->
+                    UnknownTagReceivedFromJS tag
         )
 
 
 type FromJS
     = AuthStateChanged
-    | Unknown
+    | LoginError
+    | SignupError
+    | UserSignedOut
+    | UnknownTag String
 
 
 type ToJS
-    = LoginUser String String
+    = LoginUser Form
+    | CreateUser Form
+    | SignOut
 
 
-toElmTagFromString string =
+fromJsTagFromString : String -> FromJS
+fromJsTagFromString string =
     case string of
         "AuthStateChanged" ->
             AuthStateChanged
 
+        "LoginError" ->
+            LoginError
+
+        "SignupError" ->
+            SignupError
+
+        "UserSignedOut" ->
+            UserSignedOut
+
         _ ->
-            Unknown
+            UnknownTag string
 
 
 

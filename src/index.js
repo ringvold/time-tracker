@@ -63,7 +63,6 @@ app.ports.toJS.subscribe(portData => {
                     portData.data.password
                 )
                 .catch(function(error) {
-                    // TODO: Send info back to Elm
                     var errorCode = error.code
                     var errorMessage = error.message
                     console.log(errorCode, errorMessage)
